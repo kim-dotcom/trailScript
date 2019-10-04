@@ -1,0 +1,399 @@
+//------------------------------------------------------------------------------
+// Trail visualization script, version 2016-10-03
+// This script visualizes path data of an individual passing through a location.
+//
+// Accepted data format: id,hour,min,sec,ms,xpos,ypos,zpos,upos,vpos,wpos
+//   This is taken from a CSV-formated file.
+//   Time and x/y/z positions are necessary, u/v/w look directions are optional.
+//
+// The script is tailored to be used with VR data (Unity PathScript).
+// When disabling showLookAngles and adjusting data, GPS can be visualized too.
+//
+// Usage: set your own overlayImage, and pathTable. Normalize the coordinates.
+//
+// Notes: Camera.main.transform.rotation.eulerAngles --> u/v/wGazePos (Oculus).
+//          This is the original u/v/wpos (to be used in visualizations).
+//        transform.rotation.eulerAngles --> u/v/wMousePos (mouselook).
+//          Addition for oculus users (gaze != mousePos).
+//------------------------------------------------------------------------------
+
+//visualization type
+final boolean DISPLAY_PATH = true;
+final boolean DISPLAY_GRID = true;
+
+//setup variables
+final boolean SHOW_LOOK_ANGLES = true; //show where camera looks, too
+final boolean SHOW_IDLE_STOPS = true;  //show where the path stops
+final boolean EXPORT_AS_IMAGE = true; //export the visualization to a PNG image
+final int VISUALIZATION_SIZE = 1000;    //general size of the output
+final int VISUALIZATION_BORDER = 25;   //general border size
+final int TEXT_DISTANCE = 300;         //text to the outside border of the image
+final int PATHSCRIPT_INTERVAL = 500;   //PathScript measurement inteval (ms)
+
+//coordinate normalization
+float normalizeMultiplerSq = 500;
+    //if multiplied by -1, path mirrors across the affected axis
+float normalizeMultiplerX = (VISUALIZATION_SIZE / normalizeMultiplerSq);
+float normalizeMultiplerZ = (VISUALIZATION_SIZE / normalizeMultiplerSq)*(-1);
+float normalizeBaseX = 0;
+float normalizeBaseZ = -4;
+//float normalizeAngleV = -85;
+float normalizeAngleV = -85;
+
+//grid visualization settings
+final int gridSizeX = 20;
+final int gridSizeY = 20;
+color gridColor1 = color(255,255,255);
+color gridColor2 = color(255,0,0);
+float gridOpacity = 128;
+
+//data variables
+final String[] PATH_TABLE_URL = {"data/obj_path_20170317_123246_path_only_a.txt",
+                                 "data/obj_path_20170317_123246_path_only_b.txt",
+                                 "data/obj_path_20170329_113308_path_only_a.txt",
+                                 "data/obj_path_20170329_113308_path_only_b.txt",
+                                 "data/spa_path_20170320_150140.txt",
+                                 "ocul1_path_20170321_161641_exploration.txt",
+                                 "ocul1_path_20170321_163244_church_a.txt",
+                                 "ocul1_path_20170321_163244_church_b.txt",
+                                 "ocul2_path_20170322_150742_exploration.txt",
+                                 "ocul2_path_20170322_152845_church_a.txt",
+                                 "ocul2_path_20170322_152845_church_b.txt",
+                                 "real1_path_20170317_130312_exploration.txt",
+                                 "real1_path_20170317_131535_church_a.txt",
+                                 "real1_path_20170317_131535_church_b.txt",
+                                 "real2_path_20170317_150402_exploration.txt",
+                                 "real2_path_20170317_151241_church_a.txt",
+                                 "real2_path_20170317_151241_church_b.txt"
+                                };
+
+final String OVERLAY_IMAGE_URL = "visualization_bg.png";
+Table pathTable;                       //stores the .csv file
+Table pathTable2;
+Table pathTable3;
+PImage overlayImage;
+
+int exportedTableNumber = 5;
+
+void settings() {
+  size(VISUALIZATION_SIZE, VISUALIZATION_SIZE); 
+}
+
+void setup() {
+  pathTable  = loadTable(PATH_TABLE_URL[exportedTableNumber], "header, csv");
+  //pathTable2  = loadTable(PATH_TABLE_URL[1], "header, csv");
+  //pathTable3  = loadTable(PATH_TABLE_URL[2], "header, csv");
+  overlayImage = loadImage(OVERLAY_IMAGE_URL);
+}
+
+void draw() {
+  drawOverlay();
+
+  translate(width/2, height/2);
+  if (DISPLAY_PATH) { 
+    drawPath(pathTable, color(120,0,60));
+    //drawPath(pathTable2, color(0,120,60));
+  }
+  if (DISPLAY_GRID) {
+    drawGrid(gridSizeX, gridSizeY, gridColor1, gridColor2, gridOpacity);
+  }
+  showStats(pathTable);
+
+  exportImage(PATH_TABLE_URL[exportedTableNumber]);
+
+  //execute only once
+  noLoop();
+}
+
+//square and terrain image overlay
+void drawOverlay() {
+  overlayImage.resize(VISUALIZATION_SIZE - (VISUALIZATION_BORDER * 2),
+                      VISUALIZATION_SIZE - (VISUALIZATION_BORDER * 2));
+  image(overlayImage, VISUALIZATION_BORDER, VISUALIZATION_BORDER);
+  noFill();
+  rect(VISUALIZATION_BORDER, VISUALIZATION_BORDER,
+       VISUALIZATION_SIZE - (VISUALIZATION_BORDER*2),
+       VISUALIZATION_SIZE - (VISUALIZATION_BORDER*2));
+}
+
+//path from the CSV file
+void drawPath(Table thisTable, color strokeColor) {
+  int thisTableRows = thisTable.getRowCount(); 
+  int idleCounter = 0;                    //# measurements idle (to visualize)
+  boolean visualizedIdleOccasion = true;  //do once per idle measurment set
+  Float[] xPositions = new Float[thisTableRows];
+  Float[] zPositions = new Float[thisTableRows];
+  Float[] lookAngles = new Float[thisTableRows];
+  Float[][] pathVariables = new Float[][]{xPositions, zPositions, lookAngles};  
+  
+  //set the path variables
+  for(int i=0; i < thisTableRows-1; i++) {
+    pathVariables[0][i] = normalizeXpos(thisTable.getRow(i+1).getFloat("xpos"));
+    pathVariables[1][i] = normalizeZpos(thisTable.getRow(i+1).getFloat("zpos"));
+    pathVariables[2][i] = normalizeAngle(thisTable.getRow(i+1).getFloat("vMousePos"));
+                        //+ normalizeAngle(thisTable.getRow(i+1).getFloat("vGazePos"));
+  }
+    
+  //look angle visualization
+      //line(100, 100, 100 + cos(radians(0))*200, 100 - sin(radians(0))*200);
+  if (SHOW_LOOK_ANGLES) {
+    stroke(160);
+    for(int i=0; i < thisTableRows-1; i++) {      
+      line(pathVariables[0][i], pathVariables[1][i],
+           pathVariables[0][i] + cos(radians(pathVariables[2][i]))
+                                   *(VISUALIZATION_SIZE * 0.01),
+           pathVariables[1][i] - sin(radians(pathVariables[2][i]))
+                                   *(VISUALIZATION_SIZE * 0.01));
+      //print(degrees(radians(pathVariables[2][i])));
+    }
+  }
+    
+  //path visualization
+  for(int i=0; i < thisTableRows-2; i++) {
+    //line coloring (variable color, to dinstinguate intersecting paths)
+    int strokeBlend = i % 128;
+    int strokeOdd = int(round((float(i)/float(128)-0.5)));
+    //print(strokeOdd);
+    if ((strokeOdd % 2) == 1) {strokeBlend = 128 - strokeBlend;}
+    stroke(blendColor(strokeColor,color(strokeBlend,strokeBlend,255-strokeBlend),SCREEN));
+    //line rendering
+    line(pathVariables[0][i], pathVariables[1][i],
+         pathVariables[0][i+1], pathVariables[1][i+1]);
+  }
+  
+  //idle places highlighting
+  if (SHOW_IDLE_STOPS) {
+    //fill(strokeColor);
+    stroke(strokeColor);
+    for(int i=1; i < thisTableRows-1; i++) {
+      // shoud be a==b, but these Floats are not the same (some e^-10 error)
+      if ((abs(pathVariables[0][i] - pathVariables[0][i-1]) < 0.001)
+      &&  (abs(pathVariables[1][i] - pathVariables[1][i-1]) < 0.001)) {
+        idleCounter++;
+        visualizedIdleOccasion = false;       
+      } else {
+        //now we know the diameter of the idle place
+        if (!visualizedIdleOccasion) {
+           ellipse(pathVariables[0][i], pathVariables[1][i],
+                   6 + round(idleCounter/2), 6 + round(idleCounter/2));
+          idleCounter = 0;
+          visualizedIdleOccasion = true;
+        }          
+      }  
+    }
+    //last coordinate fix
+    if (!visualizedIdleOccasion) {
+      ellipse(pathVariables[0][thisTableRows-2],
+              pathVariables[1][thisTableRows-2],
+              6 + round(idleCounter/2), 6 + round(idleCounter/2));
+      idleCounter = 0;
+      visualizedIdleOccasion = true;
+    }
+  }
+  //once the main visualisation is done (path color), revert to defaults
+  stroke(0);
+
+  //first and last corrdinate highlight (green/red)
+  fill(0,255,0);
+  ellipse(pathVariables[0][0], pathVariables[1][0], 6, 6);
+  fill(255,0,0);
+  ellipse(pathVariables[0][thisTableRows-2],
+          pathVariables[1][thisTableRows-2], 6, 6);
+  noFill();
+}
+
+//draws the dasymetric grid
+void drawGrid(int sizeX, int sizeY, color color1, color color2, float opacity) {
+  int[][] gridAbsolutes = new int[sizeY][sizeX];
+  Float[][] gridRelatives = new Float[sizeY][sizeX];
+  int gridUnitSizeX = VISUALIZATION_SIZE / sizeX;
+  int gridUnitSizeY = VISUALIZATION_SIZE / sizeY;
+  
+  //compute the colorization value
+  //TODO> refactor from drawPath
+  int tableRows = pathTable.getRowCount();
+  Float[] xPositions = new Float[tableRows];
+  Float[] zPositions = new Float[tableRows];
+  Float[][] pathVariables = new Float[][]{xPositions, zPositions};
+  for(int i=0; i < tableRows-1; i++) {
+    pathVariables[0][i] = normalizeXpos(pathTable.getRow(i+1).getFloat("xpos")) + width/2; //quick and dirty fix
+    pathVariables[1][i] = normalizeZpos(pathTable.getRow(i+1).getFloat("zpos")) + height/2;
+    println(pathVariables[0][i], pathVariables[1][i]);
+    int gridPosX = 0;
+    int gridPosY = 0;
+    while(pathVariables[0][i] > gridUnitSizeX) {
+      gridPosX++;
+      pathVariables[0][i] -= gridUnitSizeX;
+    }
+    while(pathVariables[1][i] > gridUnitSizeY) {
+      gridPosY++;
+      pathVariables[1][i] -= gridUnitSizeY;
+    }
+    println(gridPosX, gridPosY);
+    gridAbsolutes[gridPosY][gridPosX]++;    
+  }
+  for (int i = 0; i < sizeX; i++) {
+    println("======================================== Row" + i + " ===============================================");
+    printArray(gridAbsolutes[i]);
+  }
+  
+  //render the grid
+  for (int i = 0; i < sizeX; i++) {
+    for (int j = 0; j < sizeY; j++) {
+      println(gridAbsolutes[j][i]);
+      gridRelatives[j][i] = float(gridAbsolutes[j][i]) / 255;
+      fill(lerpColor(color1, color2, gridRelatives[j][i]),opacity);
+      //text(gridAbsolutes[j][i], i*gridUnitSizeX, j*gridUnitSizeY);
+      rect(i*gridUnitSizeX - width/2, j*gridUnitSizeY - height/2, gridUnitSizeX, gridUnitSizeY);
+    }
+  }
+}
+
+//show stats of a specific path table
+void showStats (Table thisTable) {
+  float distanceTravelled = 0;            //in unity units
+  float cameraAngles = 0;                 //in angles (horizontal only)
+  float measurementDelayAvg = 0;          //sum(measurementLog)/thisTableRows
+  int measurementDelayMin = 1000000;      //lowest delay (closest to PathScript)
+  int measurementDelayMax = 0;            //highest delay (laggy one)
+  int idleOccasions = 0;                  //# of times the user stopped
+  boolean countedForIdleOccasion = false; //do once per idle measurment set
+  float timeStoodIdle = 0;                //time not moving
+  int thisTableRows = thisTable.getRowCount();
+  int[] measurementDelayLog = new int[thisTableRows]; //for eventual analysis
+  Float[] distanceLog = new Float[thisTableRows];     //for eventual analysis
+  
+  for(int i=1; i < thisTableRows; i++) {
+    //path variables
+    float currentX = thisTable.getRow(i).getFloat("xpos");
+    float currentY = thisTable.getRow(i).getFloat("zpos"); //xz for this plane
+    float currentZ = thisTable.getRow(i).getFloat("ypos"); //height axis
+      //horizontal camera angle
+    float currentV = normalizeAngle(thisTable.getRow(i).getFloat("vMousePos"));
+    float previousX = thisTable.getRow(i-1).getFloat("xpos");
+    float previousY = thisTable.getRow(i-1).getFloat("zpos"); //xz plane
+    float previousZ = thisTable.getRow(i-1).getFloat("ypos"); //height axis
+    float previousV = normalizeAngle(thisTable.getRow(i-1).getFloat("vMousePos"));
+    //time variables
+    String currentTimeMs = thisTable.getRow(i).getString("ms");
+    String previousTimeMs = thisTable.getRow(i-1).getString("ms");
+        //a fix, if the string value missed the zeros
+    if (currentTimeMs.length() == 2)  {
+      currentTimeMs = "0" + currentTimeMs;
+    } else if (currentTimeMs.length() == 1) {
+      currentTimeMs = "00" + currentTimeMs;
+    }
+    if (previousTimeMs.length() == 2) {
+      previousTimeMs = "0" + previousTimeMs;
+    } else if (previousTimeMs.length() == 1) {
+      previousTimeMs = "00" + previousTimeMs;
+    }
+    int currentTime = int(thisTable.getRow(i).getString("sec")
+                          + currentTimeMs);
+    int previousTime = int(thisTable.getRow(i-1).getString("sec") 
+                           + previousTimeMs);    
+    
+    //overall distance counter
+    float distanceX = currentX - previousX;
+    float distanceY = currentY - previousY;
+    float distanceZ = currentZ - previousZ; //height axis
+    float currentDistance = sqrt(pow(distanceX,2)
+                                +pow(distanceY,2)
+                                +pow(distanceZ,2));
+    distanceTravelled += currentDistance;
+    distanceLog[i-1] = currentDistance;
+    
+    //overall camera rotation counter
+    if(abs(currentV - previousV) > 180) {
+      if (currentV > previousV) {
+        currentV -= 360;
+      } else {
+        previousV -= 360;
+      }
+    }
+    cameraAngles += abs(currentV - previousV);
+    
+    //avg delay counter
+    if (currentTime < previousTime) {
+      currentTime += 60000; //to fix minute overflows
+    } 
+    int currentDelay = currentTime - previousTime;
+    measurementDelayAvg += currentDelay;
+    measurementDelayLog[i-1] = currentDelay;
+    //min/max delay logging
+    if (currentDelay < measurementDelayMin) {
+      measurementDelayMin = currentDelay; //init to a high number before
+    }
+    if (currentDelay > measurementDelayMax) {
+      measurementDelayMax = currentDelay;
+    }    
+    
+    //stood idle delay counter
+    if ((currentX == previousX) && (currentY == previousY)) {
+      timeStoodIdle += currentDelay;
+    }
+    
+    //idle counter
+    if ((currentX == previousX) && (currentY == previousY)) {
+      if(!countedForIdleOccasion) {
+        idleOccasions++;
+        countedForIdleOccasion = true;
+      }     
+    } else {
+      countedForIdleOccasion = false;
+    }  
+  }
+  
+  fill(0,0,0);
+  textSize(12);
+  text("Distance travelled: " + round(distanceTravelled) + "m",
+       VISUALIZATION_SIZE * 0.5 - TEXT_DISTANCE, VISUALIZATION_SIZE*0.5-120);
+  text("Measurements logged: " + thisTableRows,
+       VISUALIZATION_SIZE * 0.5 - TEXT_DISTANCE, VISUALIZATION_SIZE*0.5-102);  
+  
+  text("Delay: " + round(measurementDelayAvg/thisTableRows) + "ms (avg), "
+                 + measurementDelayMin + "/"
+                 + measurementDelayMax + " (min/max)",
+       VISUALIZATION_SIZE * 0.5 - TEXT_DISTANCE, VISUALIZATION_SIZE * 0.5-84);
+       
+  float timeBegun = float(thisTable.getRow(0).getString("hour")) * 3600
+                  + float(thisTable.getRow(0).getString("min"))  * 60
+                  + float(thisTable.getRow(0).getString("sec"));
+  float timeEnded = float(thisTable.getRow(thisTableRows-1).getString("hour")) * 3600
+                  + float(thisTable.getRow(thisTableRows-1).getString("min"))  * 60
+                  + float(thisTable.getRow(thisTableRows-1).getString("sec"));
+  text("Time taken: " + round(timeEnded-timeBegun) + "s",
+       VISUALIZATION_SIZE * 0.5 - TEXT_DISTANCE, VISUALIZATION_SIZE * 0.5-66);
+  text("Time not walked: " + round(timeStoodIdle/1000) + "s;"
+                           + " stopped " + idleOccasions + " times",
+       VISUALIZATION_SIZE * 0.5 - TEXT_DISTANCE, VISUALIZATION_SIZE * 0.5-48);
+  text("Total camera rotation: " + round(cameraAngles) + " degrees",
+       VISUALIZATION_SIZE * 0.5 - TEXT_DISTANCE, VISUALIZATION_SIZE * 0.5-30);
+}
+
+//normalize x coordinates from CVS to processing display
+float normalizeXpos(float xpos) {
+  return (xpos + normalizeBaseX) * normalizeMultiplerX;
+}
+
+//normalize z coordinates from CVS to processing display
+float normalizeZpos(float zpos) {
+  return (zpos + normalizeBaseZ) * normalizeMultiplerZ;
+}
+
+//normalize the look angle (acc. to default camera rotation)
+float normalizeAngle(float angle) {
+  angle += normalizeAngleV;
+  angle *= (-1); //needs to be inverted
+  //while (angle < 0) {angle += 360;}
+  //while (angle > 360) {angle -= 360;}
+  return angle;
+}
+
+//export the visualized path to PNG
+void exportImage(String sourceUrl) {
+  if (EXPORT_AS_IMAGE) {
+    String[] imageUrl = split(sourceUrl, '.');
+    save(imageUrl[0] + ".png");
+  }
+}

@@ -1,0 +1,4 @@
+floorName,floorMin,floorMax
+ground,-5,2
+2ndFloor,2,6
+3rdFloor,6,100

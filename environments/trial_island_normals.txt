@@ -1,0 +1,2 @@
+squareMultipler,multiplerX,multiplerZ,mirrorX,mirrorZ,baseX,baseZ,angleV
+122, 122, 122, 1, -1, -18.5, -14.0, -85
